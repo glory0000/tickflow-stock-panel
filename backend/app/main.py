@@ -104,19 +104,30 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.warning("depth_service init failed: %s", e)
 
-    # 扩展数据定时拉取
-    from app.services.ext_pull import pull_scheduler
-    pull_scheduler.start(store.data_dir)
-    pull_scheduler.refresh(store.data_dir)
-    app.state.pull_scheduler = pull_scheduler
+    # 企业微信智能机器人长连接(可选通道, 失败不阻断启动)
+    try:
+        from app.services.wecom_bot_service import WecomBotService
+        wecom_bot_service = WecomBotService()
+        wecom_bot_service.set_app_state(app.state)
+        app.state.wecom_bot_service = wecom_bot_service
+        wecom_bot_service.boot_check()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("wecom_bot_service init failed: %s", e)
 
-    # 内置扩展表 (概念/行业): 只创建 config (含拉取配置), 不自动拉数据
-    # 数据获取由用户在概念/行业页点「获取数据」手动触发 (POST /api/ext-data/presets/{id}/fetch)
+    # 内置扩展表 (概念/行业): 先创建 config (含拉取配置), 默认开启定时拉取。
+    # 必须在 pull_scheduler.refresh() 之前执行, 否则全新部署时 scheduler 读不到
+    # 刚创建的预设, 定时任务不会启动。
     try:
         from app.services.ext_presets import ensure_builtin_presets
         await ensure_builtin_presets(store.data_dir)
     except Exception as e:  # noqa: BLE001
         logger.warning("内置扩展表初始化失败 (不影响启动): %s", e)
+
+    # 扩展数据定时拉取: 在预设配置就绪后启动, 自动调度 enabled 的预设。
+    from app.services.ext_pull import pull_scheduler
+    pull_scheduler.start(store.data_dir)
+    pull_scheduler.refresh(store.data_dir)
+    app.state.pull_scheduler = pull_scheduler
 
     # 财务数据 (需 Expert 套餐): 仅初始化调度器供 /api/financials/sync/* 手动同步,
     # 不启动自动调度——用户在「财务分析」页点「同步」手动拉取。
@@ -130,6 +141,7 @@ async def lifespan(app: FastAPI):
     from app.services.screener import ScreenerService
 
     _screener_svc = ScreenerService(repo)
+    _etf_screener_svc = ScreenerService(repo, asset_type="etf")
     strategy_dirs = [
         Path(__file__).resolve().parent / "strategy" / "builtin",
         store.data_dir / "strategies" / "custom",
@@ -153,6 +165,8 @@ async def lifespan(app: FastAPI):
     # 复用 ScreenerService 的历史窗口加载器 (三级缓存, 启动预计算命中 ~0ms),
     # 让声明 filter_history 的策略 (如反包) 也能在实时监控里跑选股 → 盘中触发通知。
     monitor_engine.set_history_loader(_screener_svc._load_enriched_history)
+    # ETF 版历史加载器: asset_type=etf 的 strategy 型规则用 (读 kline_etf_enriched)。
+    monitor_engine.set_history_loader_etf(_etf_screener_svc._load_enriched_history)
 
     # 自动迁移: 把旧 strategy_monitor_ids 同步为 type=strategy 规则 (统一到监控页)
     try:
@@ -189,6 +203,9 @@ async def lifespan(app: FastAPI):
     dsvc = getattr(app.state, "depth_service", None)
     if dsvc:
         dsvc.stop_polling()
+    wbot = getattr(app.state, "wecom_bot_service", None)
+    if wbot:
+        wbot.stop()
     logger.info("shutdown")
 
 

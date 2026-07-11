@@ -33,7 +33,7 @@ export const QK = {
 
   // Screener
   screener:             ['screener'] as const,
-  screenerStrategies:   ['screener-strategies'] as const,
+  screenerStrategies:   (assetType: string = 'stock') => ['screener-strategies', assetType] as const,
   screenerCached:       (ext?: string) => ['screener-cached', ext] as const,
   screenerKlineBatch:   (symbols: string) => ['screener-kline-batch', symbols] as const,
   marketSnapshot:       ['market-snapshot'] as const,
@@ -41,6 +41,7 @@ export const QK = {
 
   // Backtest
   backtestStatus:       ['backtest-status'] as const,
+  strategyDetail:       (id: string) => ['strategy-detail', id] as const,
 
   // Data / Pipeline
   dataStatus:           ['data-status'] as const,
@@ -84,6 +85,11 @@ export const QK = {
 
 // ===== SSE 应该 invalidate 的 key 前缀列表 =====
 // 新增需要 SSE 推送的查询，只需在此加一行
+//
+// 注意: 策略页 (screener-cached) 不在此列表 —— 行情刷新时策略结果不变
+// (非监控策略读盘后静态缓存, 监控策略由独立的 strategy_results_updated 事件在
+// 重算完成后刷新)。若加入 'screener', 会导致每个行情 tick 双重刷新策略页,
+// 且在 monitor "重算" 窗口内读到空结果, 造成策略列表闪烁 (变 0 → 空失效 → 又出现)。
 
 export const SSE_INVALIDATE_PREFIXES = [
   'watchlist',
@@ -91,5 +97,4 @@ export const SSE_INVALIDATE_PREFIXES = [
   'index-quotes',
   'overview-market',
   'limit-ladder',
-  'screener',
 ] as const

@@ -323,7 +323,7 @@ export interface OverviewMarket {
   }
   amount: { total: number; avg: number }
   boards: { board: string; count: number; up: number; down: number; up_pct: number; amount: number }[]
-  limit: { limit_up: number; broken: number; failed: number; limit_down: number; max_boards: number; seal_rate?: number; tiers: { boards: number; count: number }[]; sealed_ready?: boolean; fake_up?: number; fake_down?: number }
+  limit: { limit_up: number; broken: number; failed: number; limit_down: number; max_boards: number; seal_rate?: number; tiers: { boards: number; count: number; stocks?: { symbol: string; name?: string; amount?: number }[] }[]; sealed_ready?: boolean; fake_up?: number; fake_down?: number }
   distribution: { label: string; count: number; pct: number }[]
   trend: { above_ma5: number; above_ma20: number; above_ma60: number; above_ma5_pct: number; above_ma20_pct: number; above_ma60_pct: number; new_high: number; new_low: number }
   activity: { avg_turnover: number; high_turnover: number; high_vol_ratio: number; vol_ratio: number }
@@ -395,11 +395,34 @@ export interface StrategyDetail {
   limit: number
 }
 
+export interface StrategyBuildResult {
+  code: string
+  meta: Record<string, any>
+  valid: boolean
+  error: string | null
+}
+
+export type StrategyBuildStreamEvent =
+  | { type: 'meta'; strategy_id?: string; step?: number }
+  | { type: 'delta'; content: string }
+  | ({ type: 'result' } & StrategyBuildResult)
+  | { type: 'error'; message: string }
+
+export interface StrategyCodeSaveResult {
+  ok: boolean
+  strategy_id: string
+  source: 'ai' | 'custom'
+  path: string
+  meta: Record<string, any>
+}
+
 // ===== Custom Signals (自定义信号) =====
 export interface CustomSignalCondition {
   left: string     // 字段名
   op: string       // > >= < <= == !=
   right: string    // "field:xxx" 或数字字符串
+  leftDays?: number   // 左字段取几日前 (0=当日, 默认)
+  rightDays?: number  // 右字段取几日前 (仅 right 为字段时有意义)
 }
 
 export interface CustomSignal {
@@ -410,8 +433,16 @@ export interface CustomSignal {
   enabled: boolean
 }
 
+export interface CustomSignalFieldGroup {
+  key: string
+  label: string
+  fields: { key: string; label: string }[]
+}
+
 export interface CustomSignalOptions {
   fields: { key: string; label: string }[]
+  groups?: CustomSignalFieldGroup[]
+  maxDays?: number
   operators: string[]
   kinds: { key: string; label: string }[]
 }
@@ -428,6 +459,7 @@ export interface MonitorRule {
   name: string
   enabled: boolean
   type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder'
+  asset_type?: 'stock' | 'etf'
   scope: 'symbols' | 'all' | 'sector'
   symbols: string[]
   sector?: string | null
@@ -439,7 +471,8 @@ export interface MonitorRule {
   severity: 'info' | 'warn' | 'critical'
   message: string
   webhook_url?: string
-  webhook_enabled?: boolean
+  webhook_enabled?: boolean  // 兼容老规则, 已由 webhook_channels 取代
+  webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')
   created_at?: string
   // ladder 专属: 封单监控
   metric?: 'sealed_vol' | 'sealed_amount'  // 量(手) / 额(元)
@@ -754,6 +787,15 @@ export interface CustomSourceConfig {
   datasets: Record<string, DatasetConfig>
 }
 
+export interface WecomBotStatus {
+  enabled: boolean
+  running: boolean
+  connected: boolean
+  bot_id_configured: boolean
+  secret_configured: boolean
+  last_error: string
+}
+
 export interface Preferences {
   realtime_quotes_enabled: boolean
   indices_nav_pinned: boolean
@@ -789,7 +831,12 @@ export interface Preferences {
   system_notify_enabled: boolean
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
+  wecom_webhook_url?: string
+  wecom_bot_id?: string
+  wecom_bot_secret?: string
+  wecom_bot_enabled?: boolean
   webhook_enabled_default?: boolean
+  webhook_default_channels?: string[]
   sidebar_index_symbols: string[]
   nav_order: string[]
   nav_hidden: string[]
@@ -932,6 +979,7 @@ export const api = {
     request<{
       enabled: boolean
       running: boolean
+      paused?: boolean
       mode?: 'none' | 'watchlist' | 'full_market'
       realtime_allowed?: boolean
       interval_s: number
@@ -941,6 +989,10 @@ export const api = {
       etf_symbol_count?: number
       quote_age_ms: number | null
       is_trading_hours: boolean
+      is_polling_window?: boolean
+      market_phase?: string
+      final_sync_done?: boolean
+      final_sync_failed?: string | null
       last_fetch_ms: number | null
     }>('/api/intraday/status'),
   quoteInterval: () =>
@@ -986,10 +1038,35 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url, secret }),
     }),
+  updateWecomWebhook: (url: string) =>
+    request<{ wecom_webhook_url: string }>('/api/settings/preferences/wecom-webhook', {
+      method: 'PUT',
+      body: JSON.stringify({ url }),
+    }),
+  updateWecomBot: (botId: string, secret: string, enabled: boolean = true) =>
+    request<{
+      wecom_bot_id: string
+      wecom_bot_secret: string
+      wecom_bot_enabled: boolean
+      wecom_bot_status: WecomBotStatus
+    }>('/api/settings/preferences/wecom-bot', {
+      method: 'PUT',
+      body: JSON.stringify({ bot_id: botId, secret, enabled }),
+    }),
+  toggleWecomBot: (enabled: boolean) =>
+    request<{ wecom_bot_enabled: boolean; wecom_bot_status: WecomBotStatus }>('/api/settings/preferences/wecom-bot-toggle', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
   updateWebhookDefault: (enabled: boolean) =>
     request<{ webhook_enabled_default: boolean }>('/api/settings/preferences/webhook-enabled-default', {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
+    }),
+  updateWebhookDefaultChannels: (channels: string[]) =>
+    request<{ webhook_default_channels: string[] }>('/api/settings/preferences/webhook-default-channels', {
+      method: 'PUT',
+      body: JSON.stringify({ channels }),
     }),
   updatePipelineSchedule: (hour: number, minute: number) =>
     request<{ hour: number; minute: number }>('/api/settings/preferences/pipeline-schedule', {
@@ -1166,6 +1243,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ value, unit }),
     }),
+  repairDaily: (startDate: string) =>
+    request<{ status: string; job_id: string }>('/api/kline/repair_daily', {
+      method: 'POST',
+      body: JSON.stringify({ start_date: startDate }),
+    }),
   extendMinuteHistory: (value: number, unit: 'day' | 'month') =>
     request<{ status: string; job_id: string }>('/api/kline/extend_minute_history', {
       method: 'POST',
@@ -1207,16 +1289,17 @@ export const api = {
         : '/api/watchlist/enriched',
     ),
 
-  screenerStrategies: () => request<{ presets: ScreenerStrategy[]; load_errors?: StrategyLoadError[] }>('/api/screener/strategies'),
-  screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string) =>
+  screenerStrategies: (assetType: 'stock' | 'etf' = 'stock') =>
+    request<{ presets: ScreenerStrategy[]; load_errors?: StrategyLoadError[] }>(`/api/screener/strategies?asset_type=${assetType}`),
+  screenerRunPreset: (strategy_id: string, pool?: string[], asOf?: string, extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
     request<ScreenerResult>('/api/screener/run_preset', {
       method: 'POST',
-      body: JSON.stringify({ strategy_id, pool, as_of: asOf ?? null, ext_columns: extColumns || null }),
+      body: JSON.stringify({ strategy_id, pool, as_of: asOf ?? null, ext_columns: extColumns || null, asset_type: assetType }),
     }),
-  screenerRunCustom: (conditions: string[], orderBy?: string, limit = 30, pool?: string[], extColumns?: string) =>
+  screenerRunCustom: (conditions: string[], orderBy?: string, limit = 30, pool?: string[], extColumns?: string, assetType: 'stock' | 'etf' = 'stock') =>
     request<ScreenerResult>('/api/screener/run', {
       method: 'POST',
-      body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null }),
+      body: JSON.stringify({ conditions, order_by: orderBy, limit, pool, ext_columns: extColumns || null, asset_type: assetType }),
     }),
   screenerRunAll: (asOf?: string, strategyIds?: string[], extColumns?: string) =>
     request<{ as_of: string | null; results: Record<string, { total: number; as_of: string; rows: any[] }> }>(
@@ -1258,6 +1341,7 @@ export const api = {
     stop_loss_pct?: number
     max_hold_days?: number
     matching?: 'close_t' | 'open_t+1'
+    asset_type?: 'stock' | 'etf'
   }) =>
     request<BacktestResult>('/api/backtest/run', {
       method: 'POST',
@@ -1277,6 +1361,7 @@ export const api = {
     weight?: 'equal' | 'factor_weight'
     fees_pct?: number
     slippage_bps?: number
+    asset_type?: 'stock' | 'etf'
   }) =>
     request<FactorBacktestResult>('/api/backtest/factor/run', {
       method: 'POST',
@@ -1300,6 +1385,7 @@ export const api = {
     max_positions?: number
     initial_capital?: number
     position_sizing?: 'equal' | 'score_weight'
+    asset_type?: 'stock' | 'etf'
   }) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
       method: 'POST',
@@ -1317,6 +1403,7 @@ export const api = {
 
   dataStatus: () => request<DataStatus>('/api/data/status'),
   dataClear: () => request<{ deleted_files: number }>('/api/data/clear', { method: 'POST' }),
+  refreshCache: () => request<{ ok: boolean }>('/api/data/refresh-cache', { method: 'POST' }),
   enrichedSchema: (table: string) => request<EnrichedField[]>(`/api/data/schema/${table}`),
 
   testEndpoint: (url: string, rounds?: number) =>
@@ -1454,6 +1541,12 @@ export const api = {
       { method: 'POST', body: fd },
     )
   },
+
+  extDataDetectUrl: (body: ExtDataDetectUrlRequest) =>
+    request<ExtDataDetectUrlResult>('/api/ext-data/detect-url', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   extDataFixSymbol: (id: string) =>
     request<{ status: string; fixed_files: number }>(
@@ -1870,16 +1963,71 @@ export const api = {
   strategyGetSource: (id: string) =>
     request<{ code: string; source: string }>(`/api/strategies/${id}/source`),
   strategyBuild: (step: number, payload: Record<string, any>) =>
-    request<{ code: string; meta: Record<string, any>; valid: boolean; error: string | null }>(
+    request<StrategyBuildResult>(
       '/api/strategies/build',
       { method: 'POST', body: JSON.stringify({ step, ...payload }) },
     ),
 
+  async *strategyBuildStream(step: number, payload: Record<string, any>): AsyncGenerator<StrategyBuildStreamEvent> {
+    const res = await fetch('/api/strategies/build/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ step, ...payload }),
+    })
+    if (!res.ok) {
+      let detail = ''
+      try { const j = JSON.parse(await res.text()); detail = j.detail ?? j.message ?? '' } catch { /* ignore */ }
+      const msg = detail || `${res.status} ${res.statusText}`
+      toast(msg, 'error')
+      throw new Error(msg)
+    }
+    if (!res.body) throw new Error('响应无 body')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const s = line.trim()
+        if (!s) continue
+        try { yield JSON.parse(s) } catch { /* ignore */ }
+      }
+    }
+    if (buf.trim()) {
+      try { yield JSON.parse(buf.trim()) } catch { /* ignore */ }
+    }
+  },
+
+  strategyValidateCode: (payload: { code: string; strategy_id?: string; name?: string; description?: string; strict?: boolean }) =>
+    request<StrategyBuildResult>('/api/strategies/code/validate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  strategySaveCodeV2: (payload: {
+    strategy_id: string
+    code: string
+    target_source: 'ai' | 'custom'
+    mode: 'create' | 'update'
+    name?: string
+    description?: string
+    strict?: boolean
+  }) =>
+    request<StrategyCodeSaveResult>('/api/strategies/code/save', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   /** 保存 AI 生成的策略文件 */
-  strategySaveCode: (strategyId: string, code: string) =>
+  strategySaveCode: (strategyId: string, code: string, meta?: { name?: string; description?: string }) =>
     request<{ ok: boolean; path: string }>('/api/strategies/ai/save', {
       method: 'POST',
-      body: JSON.stringify({ strategy_id: strategyId, code }),
+      body: JSON.stringify({ strategy_id: strategyId, code, name: meta?.name ?? '', description: meta?.description ?? '' }),
     }),
 }
 
@@ -2004,6 +2152,26 @@ export interface PullConfig {
   last_message?: string | null
   last_rows?: number | null
   next_run?: string | null
+}
+
+export interface ExtDataDetectUrlRequest {
+  url: string
+  method?: string
+  headers?: Record<string, string>
+  body?: string
+  response_path?: string
+  field_map?: Record<string, string>
+}
+
+export interface ExtDataDetectUrlResult {
+  status: string
+  total_rows: number
+  response_path: string
+  response_path_candidates: string[]
+  fields: ExtDataField[]
+  symbol_candidates: string[]
+  code_candidates: string[]
+  preview: Record<string, unknown>[]
 }
 
 export interface ExtDataConfig {

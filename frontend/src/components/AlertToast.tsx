@@ -6,6 +6,13 @@ import type { AlertEvent } from '@/lib/api'
 import { fmtPct, fmtPrice } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import { playNotificationSound } from '@/lib/notificationSound'
+import { speakAlerts } from '@/lib/voiceBroadcast'
+
+/** 通知渠道分发 — 所有副作用渠道在此汇合, 新增渠道只改这里 */
+function dispatchSideEffects(alerts: AlertEvent[]) {
+  playNotificationSound()        // 提示音 (Web Audio 合成)
+  speakAlerts(alerts)            // 语音播报 (speechSynthesis, 各自独立开关)
+}
 
 // ===== 全局状态 (模块级, 仿 Toast.tsx 模式) =====
 type Item = { id: number; alert: AlertEvent }
@@ -60,7 +67,7 @@ export function pushAlertToasts(alerts: AlertEvent[]) {
   for (const item of newItems) {
     setTimeout(() => dismiss(item.id), AUTO_DISMISS)
   }
-  playNotificationSound()                     // 整批只响一声
+  dispatchSideEffects(alerts)                  // 副作用分发: 提示音 + 语音 (整批各一次)
 }
 
 /** 手动关闭 */
@@ -102,7 +109,12 @@ export function AlertToastContainer() {
   if (!items.length) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 w-[320px] pointer-events-none">
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+      className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 w-[320px] pointer-events-none"
+    >
       <AnimatePresence>
         {items
           .filter(item => !(item.alert.source === 'strategy' && !item.alert.symbol))
@@ -125,7 +137,16 @@ export function AlertToastContainer() {
               exit={{ opacity: 0, x: 60, scale: 0.9 }}
               transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
               onClick={() => handleClick(item.id)}
-              className="pointer-events-auto relative overflow-hidden rounded-xl border border-border/60 bg-surface/95 backdrop-blur-md shadow-2xl pl-3 pr-2 py-2.5 cursor-pointer hover:border-accent/40 hover:shadow-accent/10 transition-all"
+              role="button"
+              tabIndex={0}
+              aria-label={`查看监控通知${ev.name ? ` ${ev.name}` : ''}${ev.symbol ? ` ${ev.symbol}` : ''}`}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  handleClick(item.id)
+                }
+              }}
+              className="pointer-events-auto relative overflow-hidden rounded-xl border border-border/60 bg-surface/95 backdrop-blur-md shadow-2xl pl-3 pr-2 py-2.5 cursor-pointer hover:border-accent/40 hover:shadow-accent/10 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
             >
               {/* 左侧色条 */}
               <div className={cn('absolute left-0 top-0 h-full w-0.5', sev)} />
@@ -143,7 +164,7 @@ export function AlertToastContainer() {
                     {fmtPct(pct)}
                   </span>
                 )}
-                <button onClick={(e) => { e.stopPropagation(); dismiss(item.id) }} className="shrink-0 p-0.5 rounded text-muted/50 hover:text-foreground hover:bg-elevated transition-colors cursor-pointer">
+                <button aria-label="关闭通知" onClick={(e) => { e.stopPropagation(); dismiss(item.id) }} className="shrink-0 p-0.5 rounded text-muted/50 hover:text-foreground hover:bg-elevated transition-colors cursor-pointer">
                   <X className="h-3 w-3" />
                 </button>
               </div>

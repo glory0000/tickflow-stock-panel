@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw } from 'lucide-react'
+import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X } from 'lucide-react'
 import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { toast } from '@/components/Toast'
-import { useDataStatus, usePreferences } from '@/lib/useSharedQueries'
+import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
+import { isExpertOrAbove } from '@/lib/capability-labels'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import { PageHeader } from '@/components/PageHeader'
@@ -33,6 +34,7 @@ import {
 } from '@/lib/screener-columns'
 
 export function Screener() {
+  const [assetType, setAssetType] = useState<'stock' | 'etf'>('stock')
   const [activeStrategy, setActiveStrategy] = useState<string | null>(null)
   const [result, setResult] = useState<ScreenerResult | null>(null)
   const [asOf, setAsOf] = useState<string>('')
@@ -56,6 +58,17 @@ export function Screener() {
       return next
     })
   }, [])
+  // 分时图显示开关（仅当 intraday 列可见时才有意义；持久化）
+  const [intradayChartVisible, setIntradayChartVisible] = useState<boolean>(() => storage.screenerIntraday.get(true))
+  const toggleIntradayChart = useCallback(() => {
+    setIntradayChartVisible(v => {
+      const next = !v
+      storage.screenerIntraday.set(next)
+      return next
+    })
+  }, [])
+  // 截断提示可关闭 (仅本次会话, 不持久化)
+  const [intradayCapDismissed, setIntradayCapDismissed] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const [showFilter, setShowFilter] = useState(false)
   const [filter, setFilter] = useState<ScreenerFilterType>(defaultFilter)
@@ -106,8 +119,8 @@ export function Screener() {
   const screenerAutoRun = prefs?.screener_auto_run ?? true
 
   const strategies = useQuery({
-    queryKey: QK.screenerStrategies,
-    queryFn: api.screenerStrategies,
+    queryKey: QK.screenerStrategies(assetType),
+    queryFn: () => api.screenerStrategies(assetType),
   })
 
   // 策略结果缓存 — 文件读取，SSE invalidation 自动刷新
@@ -338,9 +351,55 @@ export function Screener() {
   })
   const klineData = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
 
+  // 分时列是否启用 → 决定是否加载批量分时数据 (需 kline.minute.batch 能力)
+  const intradayColumn = useMemo(() =>
+    columns.find(c => c.source.type === 'builtin' && c.source.key === 'intraday' && c.visible),
+    [columns],
+  )
+  // 分时图需 Pro+ (kline.minute.batch), 低档用户开了列也不拉数据
+  const caps = useCapabilities()
+  const hasMinuteBatch = !!caps.data?.capabilities?.['kline.minute.batch']
+  const intradayVisible = !!intradayColumn && hasMinuteBatch && intradayChartVisible
+
+  // 分时数据加载策略 (与自选页一致, 简洁优先):
+  //  - 全量加载当前列表 symbol, 但按套餐 batch 上限截断 (Pro=100 / Expert=200),
+  //    超出时只取前 batch 只并提示用户, 避免一次性发太多请求打爆 rpm 配额
+  //  - 刷新: minute_intraday_refresh 偏好开启时盘中 15s 轮询; 否则仅首次加载,
+  //    用户可点表头刷新按钮手动更新
+  const minuteBatchCap = caps.data?.capabilities?.['kline.minute.batch']?.batch ?? 100
+  const quoteStatus = useQuoteStatus()
+  const realtimeRunning = quoteStatus.data?.running ?? false
+  const intradayRefreshEnabled = prefs?.minute_intraday_refresh ?? false
+
+  const allIntradaySymbols = useMemo(
+    () => displayRows.map((r: any) => r.symbol),
+    [displayRows],
+  )
+  const intradayTruncated = intradayVisible && allIntradaySymbols.length > minuteBatchCap
+  // 是否已是最高档 (Expert+): 最高档时截断提示不再建议"升级套餐"
+  const isMaxTier = isExpertOrAbove(caps.data?.label ?? '')
+  // 截断到 batch 上限 (Pro=100 / Expert=200), 一次请求 = 一次 TickFlow 调用
+  const intradaySymbols = useMemo(
+    () => intradayTruncated ? allIntradaySymbols.slice(0, minuteBatchCap) : allIntradaySymbols,
+    [allIntradaySymbols, intradayTruncated, minuteBatchCap],
+  )
+  const intradaySymbolsKey = intradaySymbols.join(',')
+
+  const minuteBatch = useQuery({
+    queryKey: QK.minuteBatch(intradaySymbolsKey),
+    queryFn: () => api.klineMinuteBatch(intradaySymbols),
+    enabled: intradayVisible && intradaySymbols.length > 0,
+    staleTime: 10_000,
+    // 仅当开启分时刷新偏好 且 盘中实时行情运行时 才轮询 (省 rpm)
+    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? 15_000 : false,
+  })
+  const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
+
   // asOf 确定后 + 策略列表就绪 + 策略池非空 → 自动跑一次 (受系统设置开关控制)
   // 缓存命中时秒加载; 未命中时, 仅当 screener_auto_run 开启才自动触发 runAll
   useEffect(() => {
+    // ETF 模式无股票盘后缓存/ runAll, 单策略走实时单跑, 不触发 runAll
+    if (assetType !== 'stock') return
     if (!asOf || !strategies.data?.presets?.length || runAll.isPending || visiblePool.length === 0) return
     const runKey = `${asOf}|${visiblePool.join(',')}|${extColumnsParam}`
     if (runAllDateRef.current === runKey) return
@@ -363,7 +422,7 @@ export function Screener() {
 
   const run = useMutation({
     mutationFn: ({ id, date }: { id: string; date: string }) =>
-      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined),
+      api.screenerRunPreset(id, undefined, date || undefined, extColumnsParam || undefined, assetType),
     onSuccess: (data, vars) => {
       setResult(data)
       // 同步更新卡片上的命中数
@@ -379,6 +438,12 @@ export function Screener() {
     handleStrategySwitch(s.id)
     setActiveStrategy(s.id)
     setShowAll(false)
+    // ETF 模式: 无股票盘后缓存, 始终实时单跑。
+    // 传空日期让后端用 ETF 自己的最新交易日 (asOf 跟随的是股票 enriched, 两者可能不同日)。
+    if (assetType !== 'stock') {
+      run.mutate({ id: s.id, date: '' })
+      return
+    }
     // 优先从 effectiveResults (缓存 + runAll) 取数据
     const r = effectiveResults?.[s.id]
     if (r && r.as_of === asOf) {
@@ -441,7 +506,7 @@ export function Screener() {
   const reloadStrategies = useMutation({
     mutationFn: api.strategyReload,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: QK.screenerStrategies })
+      qc.invalidateQueries({ queryKey: ['screener-strategies'] })
       if (asOf) runAll.mutate({ date: asOf })
     },
   })
@@ -509,6 +574,22 @@ export function Screener() {
         subtitle="基于本地 enriched 表 · 毫秒级 SQL"
         right={
           <div className="flex items-center gap-2">
+            {/* 资产类型切换: 股票 / ETF */}
+            <div className="flex items-center h-7 rounded-btn border border-border overflow-hidden">
+              {(['stock', 'etf'] as const).map(t => (
+                <button
+                  key={t}
+                  onClick={() => { setAssetType(t); setActiveStrategy(null); setResult(null); setShowAll(false) }}
+                  className={`h-full px-2.5 text-xs font-medium transition-colors cursor-pointer
+                    ${assetType === t
+                      ? 'bg-accent/10 text-accent'
+                      : 'text-muted hover:text-secondary hover:bg-elevated'
+                    }`}
+                >
+                  {t === 'stock' ? '股票' : 'ETF'}
+                </button>
+              ))}
+            </div>
             {/* 重新运行策略：重载策略文件并重跑全部策略，更新命中个股 */}
             <button
               onClick={() => reloadStrategies.mutate()}
@@ -618,7 +699,7 @@ export function Screener() {
                   active={activeStrategy === s.id}
                   count={hitCounts[id]}
                   expiredCount={expiredCounts[id]}
-                  loading={runAll.isPending && hitCounts[id] == null}
+                  loading={runAll.isPending}
                   cardSize={cardSize}
                   onRun={() => handleRun(s)}
                   disabled={run.isPending && activeStrategy === s.id}
@@ -739,6 +820,21 @@ export function Screener() {
                       <span className="num">{result.elapsed_ms.toFixed(1)} ms</span>
                     </div>
                   )}
+                  {/* 分时截断提示: 超套餐上限时在工具栏内联显示, 可关闭 */}
+                  {intradayTruncated && !intradayCapDismissed && (
+                    <span className="inline-flex items-center gap-1 text-xs text-warning/90">
+                      分时仅前 {minuteBatchCap}/{allIntradaySymbols.length}
+                      {!isMaxTier && ', 可升级'}
+                      <button
+                        type="button"
+                        onClick={() => setIntradayCapDismissed(true)}
+                        className="text-warning/50 hover:text-warning transition-colors"
+                        title="关闭提示"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -778,6 +874,12 @@ export function Screener() {
                     klineData={klineData}
                     dailyKChartVisible={dailyKChartVisible}
                     onToggleDailyKChart={toggleDailyKChart}
+                    minuteData={minuteData}
+                    intradayChartVisible={intradayChartVisible}
+                    onToggleIntradayChart={toggleIntradayChart}
+                    intradayAutoRefresh={intradayRefreshEnabled && realtimeRunning}
+                    onRefreshIntraday={() => minuteBatch.refetch()}
+                    intradayRefreshing={minuteBatch.isFetching}
                     sort={sort}
                     onSortToggle={toggle}
                   />
@@ -838,7 +940,7 @@ export function Screener() {
               description: detail.description ?? '',
               direction: 'long',
               rules: storage.strategyRules.get({})[settingsStrategyId] ?? '',
-              code: src.code, step: 2, strategyId: settingsStrategyId,
+              code: src.code, step: 2, strategyId: settingsStrategyId, source: src.source as any,
             })
             setSettingsStrategyId(null)
             setBuilderMode('modify')
@@ -851,7 +953,7 @@ export function Screener() {
             const rules = storage.strategyRules.get({})
             delete rules[settingsStrategyId]; storage.strategyRules.set(rules)
             setStrategyLimits(prev => { const next = {...prev}; delete next[settingsStrategyId]; return next })
-            qc.invalidateQueries({ queryKey: QK.screenerStrategies })
+            qc.invalidateQueries({ queryKey: ['screener-strategies'] })
           }
         }}
       />
@@ -874,7 +976,7 @@ export function Screener() {
         onClose={() => setShowBuilder(false)}
         mode={builderMode}
         onSavedId={async id => {
-          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies, queryFn: api.screenerStrategies })
+          const data = await qc.fetchQuery({ queryKey: QK.screenerStrategies('stock'), queryFn: () => api.screenerStrategies('stock') })
           if (!data.presets.some(s => s.id === id)) {
             throw new Error(`策略 ${id} 已保存但未加载，请检查策略代码`)
           }
