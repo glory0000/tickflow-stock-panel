@@ -623,6 +623,8 @@ export interface StrategyBacktestTrade {
   entry_signal_date?: string | null
   exit_signal_date?: string | null
   blocked_exit_days?: number
+  entry_signal_id?: string | null
+  exit_signal_id?: string | null
 }
 
 export interface StrategyBacktestResult {
@@ -703,6 +705,7 @@ export interface SettingsState {
   ai_configured?: boolean
   ai_model: string
   ai_codex_command?: string
+  ai_codex_reasoning_effort?: string
   ai_user_agent: string
 }
 
@@ -801,6 +804,7 @@ export interface Preferences {
   indices_nav_pinned: boolean
   minute_sync_enabled: boolean
   minute_sync_days: number
+  minute_sync_segment_days: number
   daily_data_provider?: string
   adj_factor_provider?: string
   minute_data_provider?: string
@@ -896,8 +900,8 @@ export const api = {
     ),
 
   /** 保存 AI 配置 */
-  saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; codex_command?: string; user_agent?: string }) =>
-    request<{ ok: boolean; ai_provider?: string; ai_model?: string; ai_codex_command?: string; ai_configured?: boolean }>('/api/settings/ai', {
+  saveAiSettings: (ai: { provider?: string; base_url?: string; api_key?: string; model?: string; codex_command?: string; codex_reasoning_effort?: string; user_agent?: string }) =>
+    request<{ ok: boolean; ai_provider?: string; ai_model?: string; ai_codex_command?: string; ai_codex_reasoning_effort?: string; ai_configured?: boolean }>('/api/settings/ai', {
       method: 'POST',
       body: JSON.stringify(ai),
     }),
@@ -941,10 +945,14 @@ export const api = {
       '/api/settings/preferences/data-providers',
       { method: 'PUT', body: JSON.stringify(cfg) },
     ),
-  updateMinuteSync: (enabled: boolean, days: number) =>
+  updateMinuteSync: (enabled: boolean, days: number, segmentDays?: number) =>
     request<Preferences>('/api/settings/preferences/minute-sync', {
       method: 'PUT',
-      body: JSON.stringify({ minute_sync_enabled: enabled, minute_sync_days: days }),
+      body: JSON.stringify({
+        minute_sync_enabled: enabled,
+        minute_sync_days: days,
+        ...(segmentDays != null ? { minute_sync_segment_days: segmentDays } : {}),
+      }),
     }),
   updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index'>>) =>
     request<{
@@ -1236,8 +1244,21 @@ export const api = {
       `/api/kline/sync?symbol=${encodeURIComponent(symbol)}&days=${days}`,
       { method: 'POST' },
     ),
-  syncMinute: () =>
-    request<{ status: string; job_id: string }>('/api/kline/sync_minute', { method: 'POST' }),
+  syncMinute: (days?: number, extend?: boolean) =>
+    request<{ status: string; job_id: string }>('/api/kline/sync_minute', {
+      method: 'POST',
+      body: JSON.stringify({ ...(days ? { days } : {}), ...(extend ? { extend: true } : {}) }),
+    }),
+  syncMinuteSingle: (symbol: string) =>
+    request<{ status: string; symbol: string; rows: number }>('/api/kline/sync_minute_single', {
+      method: 'POST',
+      body: JSON.stringify({ symbol }),
+    }),
+  clearMinute: () =>
+    request<{ status: string; removed: number }>('/api/kline/clear_minute', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
+    }),
   extendHistory: (value: number, unit: 'day' | 'month' | 'year') =>
     request<{ status: string; job_id: string }>('/api/kline/extend_history', {
       method: 'POST',
@@ -1247,11 +1268,6 @@ export const api = {
     request<{ status: string; job_id: string }>('/api/kline/repair_daily', {
       method: 'POST',
       body: JSON.stringify({ start_date: startDate }),
-    }),
-  extendMinuteHistory: (value: number, unit: 'day' | 'month') =>
-    request<{ status: string; job_id: string }>('/api/kline/extend_minute_history', {
-      method: 'POST',
-      body: JSON.stringify({ value, unit }),
     }),
   rebuildEnriched: () =>
     request<{ status: string; job_id: string }>('/api/kline/rebuild_enriched', {
