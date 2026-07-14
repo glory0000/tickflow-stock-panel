@@ -87,16 +87,41 @@ def get_options(request: Request):
     except Exception:
         pass
 
+    # 北向资金 / 两融数据的专属阈值字段
+    extra_threshold_fields: dict[str, list[dict]] = {
+        "north_bound": [
+            {"key": "net_inflow", "label": "北向资金净流入"},
+            {"key": "buy_amount", "label": "买入金额"},
+            {"key": "sell_amount", "label": "卖出金额"},
+            {"key": "net_balance", "label": "净买卖额"},
+            {"key": "quota_balance", "label": "额度余额"},
+            {"key": "quota_balance_pct", "label": "额度余额占比"},
+        ],
+        "margin": [
+            {"key": "margin_balance", "label": "融资余额"},
+            {"key": "short_balance", "label": "融券余额"},
+            {"key": "margin_buy", "label": "融资买入"},
+            {"key": "margin_repay", "label": "融资偿还"},
+            {"key": "short_sell", "label": "融券卖出"},
+            {"key": "short_cover", "label": "融券偿还"},
+            {"key": "net_balance", "label": "净融资融券余额"},
+            {"key": "margin_pct", "label": "融资占比"},
+        ],
+    }
+
     return {
         "threshold_fields": threshold_fields,
         "builtin_signals": builtin_signals,
         "custom_signals": custom_sigs,
+        "extra_threshold_fields": extra_threshold_fields,
         "operators": [">", ">=", "<", "<=", "==", "!="],
         "types": [
             {"key": "signal", "label": "个股信号"},
             {"key": "price", "label": "价格/涨跌"},
             {"key": "market", "label": "市场异动"},
             {"key": "strategy", "label": "策略监控"},
+            {"key": "north_bound", "label": "北向资金"},
+            {"key": "margin", "label": "两融数据"},
         ],
         "scopes": [
             {"key": "symbols", "label": "指定股票"},
