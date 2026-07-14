@@ -69,6 +69,15 @@ def get_options(request: Request):
         {"key": f, "label": ENRICHED_COLUMNS.get(f, f)}
         for f in sorted(ALLOWED_FIELDS)
     ]
+    # 资金流字段 (money_flow 规则专用)
+    threshold_fields.extend([
+        {"key": "main_net_inflow", "label": "主力净流入"},
+        {"key": "huge_net_inflow", "label": "超大单净流入"},
+        {"key": "big_net_inflow", "label": "大单净流入"},
+        {"key": "mid_net_inflow", "label": "中单净流入"},
+        {"key": "small_net_inflow", "label": "小单净流入"},
+        {"key": "main_pct", "label": "主力净流入占比"},
+    ])
     # 内置信号列 (布尔, 用于 op=truth)
     builtin_signals = [
         {"key": k, "label": v}
@@ -97,6 +106,8 @@ def get_options(request: Request):
             {"key": "price", "label": "价格/涨跌"},
             {"key": "market", "label": "市场异动"},
             {"key": "strategy", "label": "策略监控"},
+            {"key": "ladder", "label": "连板梯队"},
+            {"key": "money_flow", "label": "资金流"},
         ],
         "scopes": [
             {"key": "symbols", "label": "指定股票"},
