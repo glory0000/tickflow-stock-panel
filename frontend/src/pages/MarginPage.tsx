@@ -1,11 +1,13 @@
 // 两融数据页面 — 融资融券
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { RefreshCw, BarChart3 } from 'lucide-react'
+import { RefreshCw, BarChart3, Bell } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
-import { api, type MarginRow } from '@/lib/api'
+import { api, type MarginRow, type MonitorRule } from '@/lib/api'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { MonitorMenu } from '@/components/MonitorMenu'
+import { QK } from '@/lib/queryKeys'
 
 function fmtAmount(v: number): string {
   if (Math.abs(v) >= 1e8) return (v / 1e8).toFixed(2) + '亿'
@@ -13,7 +15,15 @@ function fmtAmount(v: number): string {
   return v.toLocaleString()
 }
 
-function MarginTable({ rows }: { rows: MarginRow[] }) {
+function MarginTable({
+  rows,
+  monitoredSymbols,
+  onMonitorClick,
+}: {
+  rows: MarginRow[]
+  monitoredSymbols: Set<string>
+  onMonitorClick: (row: MarginRow, rect: DOMRect) => void
+}) {
   if (rows.length === 0) return null
 
   return (
@@ -31,25 +41,42 @@ function MarginTable({ rows }: { rows: MarginRow[] }) {
             <th className="text-right px-3 py-2 font-medium">融券偿还量</th>
             <th className="text-right px-3 py-2 font-medium">净融资余额</th>
             <th className="text-right px-3 py-2 font-medium">融资占比</th>
+            <th className="text-right px-3 py-2 font-medium w-10"></th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className="border-b border-border/50 hover:bg-elevated/50">
-              <td className="px-3 py-2 text-secondary">{row.date}</td>
-              <td className="px-3 py-2 font-mono text-secondary">{row.symbol}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.margin_balance)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.margin_buy)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.margin_repay)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.short_balance)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.short_sell)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.short_cover)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.net_balance)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">
-                {row.margin_pct > 0 ? `${(row.margin_pct * 100).toFixed(2)}%` : '-'}
-              </td>
-            </tr>
-          ))}
+          {rows.map((row, i) => {
+            const monitored = monitoredSymbols.has(row.symbol)
+            return (
+              <tr key={i} className="border-b border-border/50 hover:bg-elevated/50">
+                <td className="px-3 py-2 text-secondary">{row.date}</td>
+                <td className="px-3 py-2 font-mono text-secondary">{row.symbol}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.margin_balance)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.margin_buy)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.margin_repay)}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.short_balance)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.short_sell)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.short_cover)}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{fmtAmount(row.net_balance)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-secondary">
+                  {row.margin_pct > 0 ? `${(row.margin_pct * 100).toFixed(2)}%` : '-'}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <button
+                    onClick={e => onMonitorClick(row, e.currentTarget.getBoundingClientRect())}
+                    title={monitored ? '两融监控已开启' : '开启两融监控'}
+                    className={`p-1 rounded transition-colors ${
+                      monitored
+                        ? 'text-amber-400 hover:bg-amber-400/10'
+                        : 'text-muted hover:text-amber-400 hover:bg-amber-400/10'
+                    }`}
+                  >
+                    <Bell className="h-3.5 w-3.5" />
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -67,6 +94,39 @@ export function MarginPage() {
     enabled: !!date && !!symbols,
     staleTime: 5 * 60_000,
   })
+
+  // 两融监控规则 (type='margin'): {row.symbol → rule} 映射
+  const { data: monitorRulesData, refetch: refetchMonitorRules } = useQuery({
+    queryKey: QK.monitorRules,
+    queryFn: () => api.monitorRulesList(),
+    staleTime: 30 * 1000,
+  })
+  const marginRules = useMemo(() => {
+    const all = monitorRulesData?.rules ?? []
+    const m = new Map<string, MonitorRule>()
+    for (const r of all) {
+      // MonitorMenu 对 margin 类型发送 type='margin'(后端若不支持可能回退 'ladder');
+      // 用 name 前缀 '两融监控' 兜底识别
+      const isMargin = (r as { type: string }).type === 'margin'
+        || (r.type === 'ladder' && (r.name ?? '').startsWith('两融监控'))
+      if (isMargin && r.enabled && r.symbols[0]) {
+        m.set(r.symbols[0], r)
+      }
+    }
+    return m
+  }, [monitorRulesData])
+  const monitoredSymbols = useMemo(() => new Set(marginRules.keys()), [marginRules])
+
+  // 监控菜单: 当前选中的行 + 锚点
+  const [monitorTarget, setMonitorTarget] = useState<{ row: MarginRow; rect: DOMRect } | null>(null)
+  const handleMonitorClick = (row: MarginRow, rect: DOMRect) => {
+    setMonitorTarget(prev => {
+      // 切换同一行关闭; 不同行重新定位
+      if (prev?.row.symbol === row.symbol && prev.row.date === row.date) return null
+      return { row, rect }
+    })
+  }
+  const closeMonitorMenu = () => setMonitorTarget(null)
 
   const rows = data?.data ?? []
 
@@ -115,9 +175,24 @@ export function MarginPage() {
         ) : rows.length === 0 ? (
           <EmptyState icon={BarChart3} title="暂无数据" hint="请检查股票代码或日期是否正确" />
         ) : (
-          <MarginTable rows={rows} />
+          <MarginTable
+            rows={rows}
+            monitoredSymbols={monitoredSymbols}
+            onMonitorClick={handleMonitorClick}
+          />
         )}
       </div>
+      {/* 监控菜单浮层 (锚定到行的铃铛按钮) */}
+      {monitorTarget && (
+        <MonitorMenu
+          stock={{ symbol: monitorTarget.row.symbol, name: monitorTarget.row.symbol }}
+          ruleType="margin"
+          anchorRect={monitorTarget.rect}
+          existingRule={marginRules.get(monitorTarget.row.symbol)}
+          onClose={closeMonitorMenu}
+          onChanged={refetchMonitorRules}
+        />
+      )}
     </div>
   )
 }
