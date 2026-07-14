@@ -27,6 +27,10 @@ const Branding = lazy(() => import('./pages/Branding').then(m => ({ default: m.B
 const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
 const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
+const MoneyFlowPage = lazy(() => import('./pages/MoneyFlowPage').then(m => ({ default: m.MoneyFlowPage })))
+const LimitPoolPage = lazy(() => import('./pages/LimitPoolPage').then(m => ({ default: m.LimitPoolPage })))
+const NorthBoundPage = lazy(() => import('./pages/NorthBoundPage').then(m => ({ default: m.NorthBoundPage })))
+const MarginPage = lazy(() => import('./pages/MarginPage').then(m => ({ default: m.MarginPage })))
 
 // 首次使用守卫 —— 未完成向导则重定向到 /onboarding
 // 只挂在根路由上;/onboarding 本身不被守卫,避免循环重定向。
@@ -83,6 +87,10 @@ export const router = createBrowserRouter([
       { path: 'monitor', element: <Monitor /> },
       { path: 'trading', element: <Trading /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
+      { path: 'money-flow', element: <MoneyFlowPage /> },
+      { path: 'limit-pool', element: <LimitPoolPage /> },
+      { path: 'north-bound', element: <NorthBoundPage /> },
+      { path: 'margin', element: <MarginPage /> },
       { path: 'indices', element: <Indices /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },
