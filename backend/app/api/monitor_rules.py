@@ -78,6 +78,21 @@ def get_options(request: Request):
         {"key": "small_net_inflow", "label": "小单净流入"},
         {"key": "main_pct", "label": "主力净流入占比"},
     ])
+    # 北向资金字段 (north_bound 规则专用)
+    threshold_fields.extend([
+        {"key": "net_inflow", "label": "北向资金净流入"},
+        {"key": "buy_amount", "label": "买入金额"},
+        {"key": "sell_amount", "label": "卖出金额"},
+    ])
+    # 两融字段 (margin 规则专用)
+    threshold_fields.extend([
+        {"key": "margin_balance", "label": "融资余额"},
+        {"key": "short_balance", "label": "融券余额"},
+        {"key": "margin_buy", "label": "融资买入"},
+        {"key": "short_sell", "label": "融券卖出"},
+        {"key": "net_balance", "label": "净融资余额"},
+        {"key": "margin_pct", "label": "融资占比"},
+    ])
     # 内置信号列 (布尔, 用于 op=truth)
     builtin_signals = [
         {"key": k, "label": v}
@@ -108,6 +123,8 @@ def get_options(request: Request):
             {"key": "strategy", "label": "策略监控"},
             {"key": "ladder", "label": "连板梯队"},
             {"key": "money_flow", "label": "资金流"},
+            {"key": "north_bound", "label": "北向资金"},
+            {"key": "margin", "label": "两融数据"},
         ],
         "scopes": [
             {"key": "symbols", "label": "指定股票"},

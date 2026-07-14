@@ -538,6 +538,33 @@ class MonitorRuleEngine:
                     if c.get("op") == "truth" and row.get(c["field"])
                 ]
                 hit_rows.append((rtype, sym, name, price, pct, hit_sigs))
+        elif rtype in ("north_bound", "margin"):
+            # 北向资金 / 两融数据: 调用 astockdata provider 获取数据后条件匹配
+            symbols = rule.get("symbols", [])
+            if rtype == "margin" and not symbols:
+                return []
+            today_date = cn_today()
+            today_dt = _dt.datetime.combine(today_date, _dt.time.min)
+            if rtype == "north_bound":
+                nb_df = get_provider("astockdata").get_north_bound(today_dt)
+                if nb_df.is_empty():
+                    return []
+                hit_df = _build_condition_mask(nb_df, rule.get("conditions", []), rule.get("logic", "and"))
+            else:
+                margin_df = get_provider("astockdata").get_margin(symbols, today_dt)
+                if margin_df.is_empty():
+                    return []
+                hit_df = _build_condition_mask(margin_df, rule.get("conditions", []), rule.get("logic", "and"))
+            for row in hit_df.iter_rows(named=True):
+                sym = row.get("symbol", "")
+                name = row.get("name") or self._name_map.get(sym) or sym
+                price = row.get("close")
+                pct = row.get("pct_change")
+                hit_sigs = [
+                    c["field"] for c in rule.get("conditions", [])
+                    if c.get("op") == "truth" and row.get(c["field"])
+                ]
+                hit_rows.append((rtype, sym, name, price, pct, hit_sigs))
         elif rtype == "ladder":
             # 连板梯队封单监控: 独立处理 (需带预警封单值, 走专属 message)
             return self._evaluate_ladder(scoped, rule, now)
