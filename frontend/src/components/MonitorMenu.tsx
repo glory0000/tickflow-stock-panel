@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Bell, X, AlertCircle } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { api, type MonitorRule } from '@/lib/api'
 import { usePreferences } from '@/lib/useSharedQueries'
 
@@ -301,14 +302,25 @@ export function MonitorMenu({
   ) : null
 
   return (
-    <>
+    <AnimatePresence>
       {/* 点击遮罩关闭 */}
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div
+      <motion.div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.12 }}
+      />
+      <motion.div
         className="fixed z-50 rounded-lg bg-surface border border-border shadow-xl text-xs overflow-hidden"
         style={{ left, top, width }}
         role="dialog"
         aria-label={`${config.titlePrefix} 配置`}
+        initial={{ opacity: 0, scale: 0.95, y: -8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: -8 }}
+        transition={{ duration: 0.15, ease: 'easeOut' }}
       >
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-elevated/40">
@@ -424,7 +436,7 @@ export function MonitorMenu({
             {saving ? '保存中…' : !hasDepth ? '需更高权限' : existingRule ? '更新监控' : '开启监控'}
           </button>
         </div>
-      </div>
-    </>
+      </motion.div>
+    </AnimatePresence>
   )
 }
