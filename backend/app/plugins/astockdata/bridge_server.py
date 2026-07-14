@@ -173,7 +173,7 @@ def _get_limit_pool(date: str, status: str = "limit_up") -> list[LimitPoolRow]:
                     name=str(item.get("n", "")),
                     close=float(item.get("p", 0)) or 0.0,
                     pct_change=float(item.get("zdp", 0)) / 100 or 0.0,
-                    turnover_rate=float(item.get("hs", 0)) / 100 or 0.0 if status == "limit_up" else 0.0,
+                    turnover_rate=0.0 if status not in ("limit_up", "limit_down") else float(item.get("hs", 0)) / 100 or 0.0,
                     float_mv=float(item.get("lbc", 0)) or 0.0,
                     limit_amount=float(item.get("dmx", 0)) or 0.0,
                     break_rate=float(item.get("zbc", 0)) / 100 or 0.0 if status == "limit_up" else 0.0,
@@ -189,40 +189,41 @@ def _get_limit_pool(date: str, status: str = "limit_up") -> list[LimitPoolRow]:
 
 # === north_bound ===
 def _get_north_bound(date: str) -> list[NorthBoundRow]:
-    """获取北向资金数据。"""
-    params = {
-        "sortColumns": "TRADE_DATE",
-        "sortTypes": "-1",
-        "pageSize": "50",
-        "pageNumber": "1",
-        "reportName": "RPT_MUTUAL_FUND_SH",
-        "columns": "ALL",
-        "filter": f"(TRADE_DATE>='{date}')(TRADE_DATE<='{date}')",
-    }
-    try:
-        data = _em_get(_EM_NORTH_BOUND_URL, params)
-    except Exception as e:
-        logger.error("获取北向资金失败: %s", e)
-        return []
-
-    rows = []
-    for item in data.get("result", {}).get("data", []):
+    """获取北向资金数据（沪股通+深股通）。"""
+    rows: list[NorthBoundRow] = []
+    for rtype, report in [("SH", "RPT_MUTUAL_FUND_SH"), ("SZ", "RPT_MUTUAL_FUND_SZ")]:
+        params = {
+            "sortColumns": "TRADE_DATE",
+            "sortTypes": "-1",
+            "pageSize": "50",
+            "pageNumber": "1",
+            "reportName": report,
+            "columns": "ALL",
+            "filter": f"(TRADE_DATE>='{date}')(TRADE_DATE<='{date}')",
+        }
         try:
-            rows.append(
-                NorthBoundRow(
-                    date=str(item.get("TRADE_DATE", date)),
-                    type="SH",
-                    name="沪股通",
-                    net_inflow=float(item.get("HGT_CONCERN_NET_BUY", 0)) or 0.0,
-                    buy_amount=float(item.get("HGT_SH_BUY_AMT", 0)) or 0.0,
-                    sell_amount=float(item.get("HGT_SH_SELL_AMT", 0)) or 0.0,
-                    quota_balance=float(item.get("HGT_SH_QUOTA_BALANCE", 0)) or 0.0,
-                    quota_balance_pct=float(item.get("HGT_SH_QUOTA_RATIO", 0)) / 100 or 0.0,
-                    hold_amount=float(item.get("HGT_SH_HOLD_AMT", 0)) or 0.0,
-                )
-            )
-        except (ValueError, TypeError):
+            data = _em_get(_EM_NORTH_BOUND_URL, params)
+        except Exception as e:
+            logger.error("获取北向资金(%s)失败: %s", rtype, e)
             continue
+
+        for item in data.get("result", {}).get("data", []):
+            try:
+                rows.append(
+                    NorthBoundRow(
+                        date=str(item.get("TRADE_DATE", date)),
+                        type=rtype,
+                        name="沪股通" if rtype == "SH" else "深股通",
+                        net_inflow=float(item.get("HGT_CONCERN_NET_BUY", 0)) or 0.0,
+                        buy_amount=float(item.get(f"HGT_{rtype}_BUY_AMT", 0)) or 0.0,
+                        sell_amount=float(item.get(f"HGT_{rtype}_SELL_AMT", 0)) or 0.0,
+                        quota_balance=float(item.get(f"HGT_{rtype}_QUOTA_BALANCE", 0)) or 0.0,
+                        quota_balance_pct=float(item.get(f"HGT_{rtype}_QUOTA_RATIO", 0)) / 100 or 0.0,
+                        hold_amount=float(item.get(f"HGT_{rtype}_HOLD_AMT", 0)) or 0.0,
+                    )
+                )
+            except (ValueError, TypeError):
+                continue
     return rows
 
 
@@ -343,9 +344,12 @@ def get_margin(
 ) -> MarginResponse:
     """获取两融数据。"""
     try:
-        code = symbols.split(",")[0] if symbols else None
-        rows = _get_margin(date, code)
-        return MarginResponse(ok=True, data=rows)
+        code_list = [s.strip() for s in symbols.split(",")] if symbols else []
+        all_rows: list[MarginRow] = []
+        for code in code_list:
+            rows = _get_margin(date, code)
+            all_rows.extend(rows)
+        return MarginResponse(ok=True, data=all_rows)
     except Exception as e:
         logger.error("margin 获取失败: %s", e)
         return MarginResponse(ok=False, data=[], error=str(e))

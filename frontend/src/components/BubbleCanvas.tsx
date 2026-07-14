@@ -92,6 +92,7 @@ export const BubbleCanvas = forwardRef<HTMLCanvasElement, BubbleCanvasProps>(
     const speedRef = useRef(speed)
     const [hovered, setHovered] = useState<Bubble | null>(null)
     const [tooltip, setTooltip] = useState<{ x: number; y: number; html: string } | null>(null)
+    const prevTooltipRef = useRef<typeof tooltip>(null)
     const mouseRef = useRef<{ mx: number; my: number } | null>(null)
 
     // Keep refs in sync with props
@@ -265,8 +266,11 @@ export const BubbleCanvas = forwardRef<HTMLCanvasElement, BubbleCanvasProps>(
           }
         }
 
-        // Tooltip
-        setTooltip(null)
+        // Tooltip — only clear when no bubble is hovered and tooltip was previously shown
+        if (hovered === null && prevTooltipRef.current !== null) {
+          setTooltip(null)
+          prevTooltipRef.current = null
+        }
 
         animRef.current = requestAnimationFrame(loop)
       }
