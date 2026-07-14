@@ -1,89 +1,20 @@
-// 资金流页面 — 主力/超大/大/中/小单净流入
-import { useState } from 'react'
+// 资金流页面 — BubbleCanvas 气泡图
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Pause, Play } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
-import { api, type MoneyFlowRow } from '@/lib/api'
+import { api } from '@/lib/api'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
-import { fmtPct, priceColorClass } from '@/lib/format'
-
-function fmtAmount(v: number): string {
-  if (Math.abs(v) >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-  if (Math.abs(v) >= 1e4) return (v / 1e4).toFixed(1) + '万'
-  return v.toLocaleString()
-}
-
-function FlowBar({ value, max }: { value: number; max: number }) {
-  const pct = max > 0 ? Math.min(Math.abs(value) / max, 1) * 100 : 0
-  const isPositive = value >= 0
-  return (
-    <div className="flex items-center gap-1.5">
-      <div className="w-16 h-2 bg-elevated rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full ${isPositive ? 'bg-bull' : 'bg-bear'}`}
-          style={{ width: `${pct}%`, marginLeft: isPositive ? 0 : 'auto', marginRight: isPositive ? 'auto' : 0 }}
-        />
-      </div>
-      <span className={`text-[11px] tabular-nums ${isPositive ? 'text-bull' : 'text-bear'}`}>
-        {fmtAmount(value)}
-      </span>
-    </div>
-  )
-}
-
-function MoneyFlowTable({ rows }: { rows: MoneyFlowRow[] }) {
-  if (rows.length === 0) return null
-
-  const maxNet = Math.max(...rows.map(r => Math.abs(r.main_net_inflow)), 1)
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-muted border-b border-border">
-            <th className="text-left px-3 py-2 font-medium">日期</th>
-            <th className="text-right px-3 py-2 font-medium">收盘价</th>
-            <th className="text-right px-3 py-2 font-medium">涨跌幅</th>
-            <th className="text-right px-3 py-2 font-medium">成交量</th>
-            <th className="text-right px-3 py-2 font-medium">主力净流入</th>
-            <th className="text-right px-3 py-2 font-medium">超大单</th>
-            <th className="text-right px-3 py-2 font-medium">大单</th>
-            <th className="text-right px-3 py-2 font-medium">中单</th>
-            <th className="text-right px-3 py-2 font-medium">小单</th>
-            <th className="text-right px-3 py-2 font-medium">主力占比</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className="border-b border-border/50 hover:bg-elevated/50">
-              <td className="px-3 py-2 text-secondary">{row.date}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{row.close.toFixed(2)}</td>
-              <td className={`px-3 py-2 text-right tabular-nums ${priceColorClass(row.pct_change)}`}>
-                {fmtPct(row.pct_change)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">
-                {row.volume >= 1e8 ? (row.volume / 1e8).toFixed(2) + '亿' : row.volume >= 1e4 ? (row.volume / 1e4).toFixed(1) + '万' : row.volume.toLocaleString()}
-              </td>
-              <td className="px-3 py-2"><FlowBar value={row.main_net_inflow} max={maxNet} /></td>
-              <td className="px-3 py-2"><FlowBar value={row.huge_net_inflow} max={maxNet} /></td>
-              <td className="px-3 py-2"><FlowBar value={row.big_net_inflow} max={maxNet} /></td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.mid_net_inflow)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">{fmtAmount(row.small_net_inflow)}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-secondary">{(row.main_pct * 100).toFixed(2)}%</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
+import { BubbleCanvas, type BubbleData } from '@/components/BubbleCanvas'
 
 export function MoneyFlowPage() {
   const today = new Date().toISOString().slice(0, 10)
   const [date, setDate] = useState(today)
   const [symbols, setSymbols] = useState('000001.SZ')
   const [freq, setFreq] = useState<'daily' | 'minute'>('daily')
+  const [paused, setPaused] = useState(false)
+  const [speed, setSpeed] = useState(1)
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['money-flow', date, symbols, freq],
@@ -94,13 +25,25 @@ export function MoneyFlowPage() {
 
   const rows = data?.data ?? []
 
+  // Map MoneyFlowRow[] → BubbleData[]
+  const bubbles = useMemo<BubbleData[]>(() => {
+    return rows.map(row => ({
+      symbol: row.symbol,
+      name: row.symbol, // MoneyFlowRow has no name field, use symbol
+      date: row.date,
+      netInflow: row.main_net_inflow,
+      close: row.close,
+      volume: row.volume,
+    }))
+  }, [rows])
+
   return (
     <div className="flex flex-col h-full">
       <PageHeader
         title="资金流"
         titleExtra={
           <div className="flex items-center gap-2 text-xs text-secondary">
-            <span>主力资金 / 超大单 / 大单 / 中单 / 小单 净流入</span>
+            <span>主力资金气泡图 · 红=流入 · 绿=流出</span>
           </div>
         }
         right={
@@ -139,19 +82,43 @@ export function MoneyFlowPage() {
         <DatePicker value={date} onChange={setDate} />
         {data && (
           <span className="text-xs text-muted">
-            {rows.length} 条记录
+            {rows.length} 条记录 · {bubbles.length} 个气泡
           </span>
         )}
-      </div>
-      <div className="flex-1 overflow-auto">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-32">
-            <RefreshCw className="h-5 w-5 animate-spin text-muted" />
+        <div className="flex items-center gap-2 ml-auto">
+          {/* 暂停/继续 */}
+          <button
+            onClick={() => setPaused(p => !p)}
+            className="flex items-center gap-1.5 h-7 px-2.5 rounded text-xs text-muted hover:text-foreground hover:bg-elevated transition-colors"
+          >
+            {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+            {paused ? '继续' : '暂停'}
+          </button>
+          {/* 速度滑块 */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-muted">速度</span>
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.1}
+              value={speed}
+              onChange={e => setSpeed(parseFloat(e.target.value))}
+              className="w-20 h-1 accent-accent"
+            />
+            <span className="text-[10px] text-muted tabular-nums w-8">{speed.toFixed(1)}x</span>
           </div>
-        ) : rows.length === 0 ? (
+        </div>
+      </div>
+      <div className="flex-1 min-h-0">
+        {isLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <RefreshCw className="h-6 w-6 animate-spin text-muted" />
+          </div>
+        ) : bubbles.length === 0 ? (
           <EmptyState icon={RefreshCw} title="暂无数据" hint="请检查股票代码或日期是否正确" />
         ) : (
-          <MoneyFlowTable rows={rows} />
+          <BubbleCanvas bubbles={bubbles} paused={paused} speed={speed} />
         )}
       </div>
     </div>
