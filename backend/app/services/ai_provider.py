@@ -14,6 +14,7 @@ import tomllib
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from types import TracebackType
+from urllib.parse import urlsplit, urlunsplit
 
 from app import secrets_store
 from app.config import settings
@@ -66,6 +67,37 @@ _CODEX_ENV_ALLOWLIST = (
 Message = dict[str, str]
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+# ----------------------------------------------------------------
+# 用户 focus 输入净化 — 防止通过"特别关注"绕过红线诱导 AI 给出买卖建议
+# 命中任一敏感词时,整个 focus 被丢弃(返回空串),由各 analyzer 据此跳过注入。
+# ----------------------------------------------------------------
+_FOCUS_BLOCKLIST = re.compile(
+    r"买入|卖出|加仓|减仓|轻仓|重仓|半仓|全仓|仓位|止损|止盈|"
+    r"操作建议|买卖点|买卖区间|建仓|平仓|清仓|调仓|"
+    r"追高|低吸|反包|抄底|逃顶|进攻|防守|"
+    r"激进|稳健|保守|目标价|能涨|会跌|预测涨|预测跌|"
+    r"荐股|推荐买|推荐卖|值得投资|现在买|可以买|能买|要不要买|买吗|卖吗|"
+    r"明日基调|交易计划|下单",
+    re.IGNORECASE,
+)
+
+
+def sanitize_focus(focus: str) -> str:
+    """净化用户输入的 focus 文本。
+
+    命中交易指令/投资建议类敏感词时返回空串,阻止其注入 AI 提示词。
+    这是对系统提示词红线的兜底:即便用户试图通过 focus 绕过,也不会生效。
+    """
+    if not focus:
+        return ""
+    text = focus.strip()
+    if not text:
+        return ""
+    if _FOCUS_BLOCKLIST.search(text):
+        return ""
+    return text
 
 
 def current_ai_provider() -> str:
@@ -668,6 +700,10 @@ def _codex_home() -> Path:
 def _write_compatible_codex_config(path: Path) -> None:
     config = _read_codex_config()
     lines: list[str] = []
+    local_provider = _docker_codex_local_provider(config)
+
+    if local_provider:
+        lines.append(_toml_string("model_provider", "codex_local_access"))
 
     model = current_ai_model() or normalize_codex_model(str(config.get("model") or ""))
     if model:
@@ -682,7 +718,41 @@ def _write_compatible_codex_config(path: Path) -> None:
     lines.append(_toml_string("approval_policy", "never"))
     lines.append(_toml_string("sandbox_mode", "read-only"))
 
+    if local_provider:
+        lines.append("")
+        lines.append("[model_providers.codex_local_access]")
+        for key in ("name", "base_url", "wire_api", "experimental_bearer_token"):
+            value = local_provider.get(key)
+            if isinstance(value, str) and value:
+                lines.append(_toml_string(key, value))
+        for key in ("requires_openai_auth", "supports_websockets"):
+            value = local_provider.get(key)
+            if isinstance(value, bool):
+                lines.append(f"{key} = {'true' if value else 'false'}")
+
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _docker_codex_local_provider(config: dict) -> dict | None:
+    """Return the local-access provider adapted to Docker's host gateway."""
+    docker_host = os.environ.get("CODEX_DOCKER_HOST", "").strip()
+    if not docker_host or config.get("model_provider") != "codex_local_access":
+        return None
+
+    providers = config.get("model_providers")
+    if not isinstance(providers, dict):
+        return None
+    source = providers.get("codex_local_access")
+    if not isinstance(source, dict):
+        return None
+
+    provider = dict(source)
+    base_url = str(provider.get("base_url") or "").strip()
+    parsed = urlsplit(base_url)
+    if parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+        port = f":{parsed.port}" if parsed.port else ""
+        provider["base_url"] = urlunsplit(parsed._replace(netloc=f"{docker_host}{port}"))
+    return provider
 
 
 def _read_codex_config() -> dict:
