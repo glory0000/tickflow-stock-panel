@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 import polars as pl
 
-from app.data_providers import get_provider
+from app.data_providers.custom.loader import get_provider
 from app.market_time import cn_today
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
 from app.strategy import config as _strategy_config
@@ -517,40 +517,57 @@ class MonitorRuleEngine:
         if rtype == "strategy":
             # 策略类型: 跑策略选股 → 对比上期选股池 → 产出 new_entry/dropped 事件
             hit_rows = self._match_strategy(scoped, rule)
-        elif rtype == "ladder":
-            # 连板梯队封单监控: 独立处理 (需带预警封单值, 走专属 message)
-            return self._evaluate_ladder(scoped, rule, now)
+        elif rtype == "money_flow":
+            # 资金流监控: 从 astockdata 插件拉取当日资金流, 按条件过滤
+            symbols = rule.get("symbols", [])
+            if not symbols:
+                return []
+            today_date = cn_today()
+            today_dt = _dt.datetime.combine(today_date, _dt.time.min)
+            mf_df = get_provider("astockdata").get_money_flow(symbols, today_dt)
+            if mf_df.is_empty():
+                return []
+            hit_df = _build_condition_mask(mf_df, rule.get("conditions", []), rule.get("logic", "and"))
+            for row in hit_df.iter_rows(named=True):
+                sym = row.get("symbol", "")
+                name = row.get("name") or self._name_map.get(sym) or sym
+                price = row.get("close")
+                pct = row.get("pct_change")
+                hit_sigs = [
+                    c["field"] for c in rule.get("conditions", [])
+                    if c.get("op") == "truth" and row.get(c["field"])
+                ]
+                hit_rows.append((rtype, sym, name, price, pct, hit_sigs))
         elif rtype in ("north_bound", "margin"):
             # 北向资金 / 两融数据: 调用 astockdata provider 获取数据后条件匹配
-            today = cn_today()
-            today_dt = _dt.datetime.combine(today, _dt.time.min)
+            symbols = rule.get("symbols", [])
+            if rtype == "margin" and not symbols:
+                return []
+            today_date = cn_today()
+            today_dt = _dt.datetime.combine(today_date, _dt.time.min)
             if rtype == "north_bound":
                 nb_df = get_provider("astockdata").get_north_bound(today_dt)
                 if nb_df.is_empty():
                     return []
                 hit_df = _build_condition_mask(nb_df, rule.get("conditions", []), rule.get("logic", "and"))
-                for row in hit_df.iter_rows(named=True):
-                    sym = row.get("symbol", "")
-                    name = row.get("name") or self._name_map.get(sym) or sym
-                    price = row.get("close")
-                    pct = row.get("pct_change")
-                    hit_sigs = [c["field"] for c in rule.get("conditions", []) if c.get("op") == "truth" and row.get(c["field"])]
-                    hit_rows.append((rtype, sym, name, price, pct, hit_sigs))
-            else:  # margin
-                symbols = rule.get("symbols", [])
-                if not symbols:
-                    return []
+            else:
                 margin_df = get_provider("astockdata").get_margin(symbols, today_dt)
                 if margin_df.is_empty():
                     return []
                 hit_df = _build_condition_mask(margin_df, rule.get("conditions", []), rule.get("logic", "and"))
-                for row in hit_df.iter_rows(named=True):
-                    sym = row.get("symbol", "")
-                    name = row.get("name") or self._name_map.get(sym) or sym
-                    price = row.get("close")
-                    pct = row.get("pct_change")
-                    hit_sigs = [c["field"] for c in rule.get("conditions", []) if c.get("op") == "truth" and row.get(c["field"])]
-                    hit_rows.append((rtype, sym, name, price, pct, hit_sigs))
+            for row in hit_df.iter_rows(named=True):
+                sym = row.get("symbol", "")
+                name = row.get("name") or self._name_map.get(sym) or sym
+                price = row.get("close")
+                pct = row.get("pct_change")
+                hit_sigs = [
+                    c["field"] for c in rule.get("conditions", [])
+                    if c.get("op") == "truth" and row.get(c["field"])
+                ]
+                hit_rows.append((rtype, sym, name, price, pct, hit_sigs))
+        elif rtype == "ladder":
+            # 连板梯队封单监控: 独立处理 (需带预警封单值, 走专属 message)
+            return self._evaluate_ladder(scoped, rule, now)
         else:
             # signal / price / market: 通用条件匹配
             for sym, name, price, pct, hit_sigs in self._match_conditions(scoped, rule):

@@ -1,0 +1,8 @@
+name: astockdata
+display_name: "a-stock-data（资金流/打板/北向/两融）"
+runtime: python
+entry: app.plugins.astockdata.provider:AStockDataProvider
+check: app.plugins.astockdata.availability:availability
+datasets: [money_flow, limit_pool, north_bound, margin]
+description: "接入东财资金流/打板池/北向资金/两融数据。需 Bridge 服务运行于端口 3030。"
+install_hint: "Bridge 服务自动启动，直接调用东财 API，无需额外依赖"

@@ -2045,6 +2045,90 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ strategy_id: strategyId, code, name: meta?.name ?? '', description: meta?.description ?? '' }),
     }),
+
+  // ===== a-stock-data plugins =====
+  /** 资金流 */
+  moneyFlow: (symbols: string[], date: string, freq: 'daily' | 'minute' = 'daily') =>
+    request<{ ok: boolean; data: MoneyFlowRow[]; error?: string }>(
+      `/api/plugins/astockdata/money_flow?date=${date}&symbols=${symbols.join(',')}&freq=${freq}`,
+    ),
+
+  /** 打板池 */
+  limitPool: (date: string, status: 'limit_up' | 'limit_down' | 'all' = 'limit_up') =>
+    request<{ ok: boolean; data: LimitPoolRow[]; error?: string }>(
+      `/api/plugins/astockdata/limit_pool?date=${date}&status=${status}`,
+    ),
+
+  /** 北向资金 */
+  northBound: (date: string) =>
+    request<{ ok: boolean; data: NorthBoundRow[]; error?: string }>(
+      `/api/plugins/astockdata/north_bound?date=${date}`,
+    ),
+
+  /** 两融数据 */
+  margin: (symbols: string[], date: string) =>
+    request<{ ok: boolean; data: MarginRow[]; error?: string }>(
+      `/api/plugins/astockdata/margin?date=${date}&symbols=${symbols.join(',')}`,
+    ),
+}
+
+// ===== a-stock-data types =====
+export interface MoneyFlowRow {
+  symbol: string
+  date: string
+  minute: string | null
+  main_net_inflow: number
+  huge_net_inflow: number
+  big_net_inflow: number
+  mid_net_inflow: number
+  small_net_inflow: number
+  main_pct: number
+  close: number
+  volume: number
+  pct_change: number
+}
+
+/** 打板池 */
+export interface LimitPoolRow {
+  date: string
+  symbol: string
+  name: string
+  close: number
+  pct_change: number
+  turnover_rate: number
+  float_mv: number
+  limit_amount: number
+  break_rate: number
+  continuous_days: number
+  first_limit_time: string | null
+  status: string
+}
+
+/** 北向资金 */
+export interface NorthBoundRow {
+  date: string
+  type: string
+  name: string
+  net_inflow: number
+  buy_amount: number
+  sell_amount: number
+  quota_balance: number
+  quota_balance_pct: number
+  hold_amount: number
+}
+
+/** 两融数据 */
+export interface MarginRow {
+  date: string
+  symbol: string
+  margin_balance: number
+  margin_buy: number
+  margin_repay: number
+  short_balance: number
+  short_sell: number
+  short_cover: number
+  net_balance: number
+  margin_pct: number
 }
 
 // ===== Pipeline =====
